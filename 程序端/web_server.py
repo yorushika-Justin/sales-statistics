@@ -114,6 +114,28 @@ HTML_PAGE = """
             border: 1px solid #ffc107;
             display: block;
         }
+        .preview {
+            margin-top: 15px;
+        }
+        .preview img {
+            max-width: 100%;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+        .btn-download {
+            display: inline-block;
+            padding: 8px 20px;
+            background: #4a90d9;
+            color: white;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 14px;
+            margin: 5px 5px 10px 0;
+        }
+        .btn-download:active {
+            background: #357abd;
+        }
         input[type="file"] { display: none; }
         .footer {
             text-align: center;
@@ -196,32 +218,34 @@ HTML_PAGE = """
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    let msg = data.message;
-                    // 显示图片链接
+                    showStatus(data.message, 'success');
+                    // 显示图片预览 + 下载按钮
                     if (data.brand_png_url) {
-                        msg += '\\n\\n点击下方链接查看：';
-                    }
-                    showStatus(msg, 'success');
-                    // 如果有图片URL，显示为可点击链接
-                    if (data.brand_png_url) {
-                        const linkDiv = document.createElement('div');
-                        linkDiv.style.marginTop = '10px';
-                        const a1 = document.createElement('a');
-                        a1.href = data.brand_png_url;
-                        a1.target = '_blank';
-                        a1.textContent = '📊 品牌汇总';
-                        a1.style.marginRight = '15px';
-                        a1.style.color = '#4a90d9';
-                        linkDiv.appendChild(a1);
+                        const preview = document.createElement('div');
+                        preview.className = 'preview';
+                        // 品牌汇总
+                        const img1 = document.createElement('img');
+                        img1.src = data.brand_png_url;
+                        img1.alt = '品牌汇总';
+                        preview.appendChild(img1);
+                        const btn1 = document.createElement('a');
+                        btn1.href = data.brand_png_url + '?dl=1';
+                        btn1.className = 'btn-download';
+                        btn1.textContent = '保存品牌汇总';
+                        preview.appendChild(btn1);
+                        // 品名明细
                         if (data.item_png_url) {
-                            const a2 = document.createElement('a');
-                            a2.href = data.item_png_url;
-                            a2.target = '_blank';
-                            a2.textContent = '📋 品名明细';
-                            a2.style.color = '#4a90d9';
-                            linkDiv.appendChild(a2);
+                            const img2 = document.createElement('img');
+                            img2.src = data.item_png_url;
+                            img2.alt = '品名明细';
+                            preview.appendChild(img2);
+                            const btn2 = document.createElement('a');
+                            btn2.href = data.item_png_url + '?dl=1';
+                            btn2.className = 'btn-download';
+                            btn2.textContent = '保存品名明细';
+                            preview.appendChild(btn2);
                         }
-                        status.appendChild(linkDiv);
+                        status.appendChild(preview);
                     }
                 } else {
                     showStatus(data.message, 'error');
@@ -302,7 +326,7 @@ def upload():
 
 @app.route('/download/<path:filename>')
 def download(filename):
-    """下载生成的 PNG 文件"""
+    """下载生成的 PNG 文件。?dl=1 触发下载，否则内联显示"""
     # 安全检查：只允许从 OUTPUT_DIR 下载 PNG
     filepath = os.path.join(OUTPUT_DIR, filename)
     filepath = os.path.normpath(filepath)
@@ -314,8 +338,9 @@ def download(filename):
     if not os.path.exists(filepath):
         return jsonify(success=False, message='文件不存在'), 404
 
-    # 返回图片，浏览器直接显示
-    return send_file(filepath, mimetype='image/png', as_attachment=False)
+    # ?dl=1 → 触发下载，否则内联显示（给 <img> 用）
+    as_dl = request.args.get('dl') == '1'
+    return send_file(filepath, mimetype='image/png', as_attachment=as_dl)
 
 
 @app.route('/health')

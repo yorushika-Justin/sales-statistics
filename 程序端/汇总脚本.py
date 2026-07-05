@@ -45,25 +45,16 @@ OUTPUT_DIR = os.environ.get(
     os.path.join(os.path.expanduser('~'), 'output', 'sales')
 )
 
-# FONT_PATH: 按系统自动选字体
+# FONT_PATH: 用仓库里的微软雅黑字体（程序端/msyh.ttc）
+_FONT_DIR = os.path.dirname(os.path.abspath(__file__))
+_FONT_IN_REPO = os.path.join(_FONT_DIR, 'msyh.ttc')
+
 if os.name == 'nt':
-    # Windows
+    # Windows: 优先系统字体
     _FONT_PATH_DEFAULT = r'C:\Windows\Fonts\msyh.ttc'
 else:
-    # Linux (Render)
-    _FONT_CANDIDATES = [
-        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
-        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-    ]
-    _FONT_PATH_DEFAULT = None
-    for fp in _FONT_CANDIDATES:
-        if os.path.exists(fp):
-            _FONT_PATH_DEFAULT = fp
-            break
-    if _FONT_PATH_DEFAULT is None:
-        _FONT_PATH_DEFAULT = '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc'
+    # Linux (Render): 用仓库里的字体
+    _FONT_PATH_DEFAULT = _FONT_IN_REPO
 
 FONT_PATH = os.environ.get('FONT_PATH', _FONT_PATH_DEFAULT)
 

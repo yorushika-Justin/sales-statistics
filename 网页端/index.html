@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>销售汇总工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+            background: #f5f7fa;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+            padding: 40px;
+            width: 500px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 13px;
+            margin-bottom: 30px;
+        }
+        .drop-zone {
+            border: 2px dashed #c0c0c0;
+            border-radius: 8px;
+            padding: 50px 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #fafafa;
+        }
+        .drop-zone:hover, .drop-zone.drag-over {
+            border-color: #4a90d9;
+            background: #f0f7ff;
+        }
+        .drop-zone-text {
+            color: #888;
+            font-size: 16px;
+        }
+        .drop-zone-hint {
+            color: #bbb;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            display: none;
+        }
+        .status.success {
+            background: #f0f9ff;
+            color: #1a7f37;
+            border: 1px solid #d4edda;
+            display: block;
+        }
+        .status.error {
+            background: #fff5f5;
+            color: #dc3545;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffc107;
+            display: block;
+        }
+        input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>销售汇总工具</h1>
+        <div class="subtitle">拖入 .xls 文件，自动生成品牌汇总 + 品名明细图片</div>
+        <div class="drop-zone" id="dropZone">
+            <div class="drop-zone-text">将 .xls 文件拖入此处</div>
+            <div class="drop-zone-hint">或点击选择文件</div>
+        </div>
+        <div class="status" id="status"></div>
+        <input type="file" id="fileInput" accept=".xls">
+        <div style="text-align: center; margin-top: 20px; color: #999; font-size: 12px;">
+            <button id="stopBtn" style="background:none;border:none;color:#999;cursor:pointer;text-decoration:underline;">
+                停止服务
+            </button>
+            <span style="margin-left: 8px;">|</span>
+            <span>如需结束服务，可点上方按钮或在任务管理器结束 pythonw.exe</span>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const status = document.getElementById('status');
+
+        // 拖拽事件
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                uploadFile(files[0]);
+            }
+        });
+
+        // 点击选择
+        dropZone.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadFile(e.target.files[0]);
+            }
+        });
+
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = 'status ' + type;
+        }
+
+        function uploadFile(file) {
+            if (!file.name.toLowerCase().endsWith('.xls')) {
+                showStatus('仅支持 .xls 文件', 'error');
+                return;
+            }
+
+            showStatus('处理中……', 'loading');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showStatus(data.message, 'success');
+                } else {
+                    showStatus(data.message, 'error');
+                }
+            })
+            .catch(error => {
+                showStatus('请求失败: ' + error.message, 'error');
+            });
+        }
+
+        // 停止服务按钮
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            if (confirm('确认停止服务？停止后需重新双击启动网页端.vbs')) {
+                fetch('/shutdown', {method: 'POST'}).then(() => {
+                    document.body.innerHTML = '<h1 style="text-align:center;margin-top:200px;color:#888;">服务已停止</h1>';
+                });
+            }
+        });
+    </script>
+</body>
+</html>

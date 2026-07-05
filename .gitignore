@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 打包产物
+dist/
+build/
+*.spec
+
+# 可执行文件和备份（太大，不上传）
+*.exe
+*.exe.*
+
+# Claude Code 配置
+.claude/
+
+# CodeGraph 数据
+.codegraph/
+
+# 日志文件
+*.log
+
+# 备份文件
+备份*/
+
+# 临时文件
+*.tmp
+*.bak

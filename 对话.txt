@@ -184,3 +184,39 @@ AI：执行：
 ================================================================
 记录结束
 ================================================================
+
+----------------------------
+第 53 轮：Render 云部署 — 手机端方案 (2026-07-04)
+----------------------------
+
+用户：希望手机端能使用销售汇总工具。
+
+AI：评估方案（APP/小程序/夸克书签等）后，选定 Render.com 免费云部署。
+
+执行：
+  1. 创建 `程序端/` 目录 — 适配层模式，不修改原版
+  2. `程序端/汇总脚本.py` — mock tkinter + 覆盖 OUTPUT_DIR/FONT_PATH + process_xls() 封装
+  3. `程序端/web_server.py` — Flask 入口，host=0.0.0.0，PORT 从环境变量读取
+  4. `程序端/msyh.ttc` — 微软雅黑字体嵌入仓库（Render 无 sudo）
+  5. `requirements.txt` / `Procfile` / `.gitignore` — 部署配置
+  6. GitHub 仓库：`git@github.com:yorushika-Justin/sales-statistics.git`
+
+遇到的问题：
+  - Render 克隆旧 commit → 手动 Deploy Latest Commit
+  - gunicorn not found → 改 Start Command 为 python
+  - tkinter 报错 → 适配层 mock sys.modules
+  - sudo not found → 去掉 apt-get，直接嵌入字体文件
+  - PNG 生成后用户拿不到 → 加 /download 路由 + ?dl=1 触发下载
+
+最终效果：
+  - 公网地址：`https://sales-statistics-rdle.onrender.com`
+  - 手机夸克打开 → 选文件 → 上传 → 预览图片 → 点击下载到手机
+  - Render 免费层 750 小时/月，无需电脑保持开启
+
+文档更新：
+  - `程序端/技术文档.md` — 新建
+  - `CLAUDE.md` — 三方案并联 + 程序端架构 + 6 种使用方式
+
+================================================================
+记录结束
+================================================================

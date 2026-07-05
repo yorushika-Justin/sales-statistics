@@ -13,14 +13,18 @@ import os
 # 将项目根目录加入 sys.path，以便 import 原版汇总脚本
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 尝试导入 tkinter（服务器上可能没有 Tk 库）
-try:
-    import tkinter as tk
-    _HAS_TK = True
-except ImportError:
-    _HAS_TK = False
+# 服务器上没有 Tk 库，mock 掉 tkinter 避免原版导入时报错
+if os.name != 'nt':
+    import types
+    _tk_mock = types.ModuleType('tkinter')
+    _tk_mock.Tk = type('Tk', (), {'withdraw': lambda s: None, 'destroy': lambda s: None})
+    _tk_mock.messagebox = types.ModuleType('tkinter.messagebox')
+    _tk_mock.messagebox.showerror = lambda *a, **kw: None
+    _tk_mock.messagebox.askyesno = lambda *a, **kw: False
+    sys.modules['tkinter'] = _tk_mock
+    sys.modules['tkinter.messagebox'] = _tk_mock.messagebox
 
-# 导入原版核心函数（这些函数不依赖 tkinter）
+# 导入原版核心函数
 from 汇总脚本 import (
     read_xls,
     read_xlsx,

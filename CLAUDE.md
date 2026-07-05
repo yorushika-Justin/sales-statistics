@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-销售汇总工具 — xls/xlsx → 按品牌 sum → PNG + 按品名列明细 → PNG。**双方案并联**:
+销售汇总工具 — xls/xlsx → 按品牌 sum → PNG + 按品名列明细 → PNG。**三方案并联**:
 
 - **exe 方案**:`汇总脚本.py` + pyinstaller,34 MB 单文件,离线可分发
 - **网页端方案**:`网页端/web_server.py` + Flask,Edge 多标签页并发,无需打包
+- **程序端方案**:`程序端/web_server.py` + Render.com 云部署,手机端可用,无需电脑
 
-两种方案**共用** `汇总脚本.py` 的 `read_xls` / `read_xlsx` / `draw_table` / `read_xls_items` / `read_xlsx_items` / `draw_table_detail` / `OUTPUT_DIR`。改 `汇总脚本.py` 影响两端。
+三种方案**共用** `汇总脚本.py` 的核心函数。改 `汇总脚本.py` 影响三端。
 
 ## 硬编码常量(改路径/端口需改源码)
 
@@ -78,19 +79,36 @@ python 网页端\web_server.py
 | `open_browser()` | socket 轮询探测端口就绪后 `os.startfile` 打开浏览器(v1.2 改进) |
 | `if __name__ == '__main__'` | 启动检查(端口+目录)→ 启动 Flask(`app.run(host='127.0.0.1', port=PORT, threaded=True)`),捕获 `OSError` |
 
+### 程序端方案(`程序端/web_server.py` + Render.com 云部署)
+
+适配层模式：`程序端/汇总脚本.py` 从原版导入核心函数，覆盖服务器不兼容配置（tkinter mock、OUTPUT_DIR、FONT_PATH）。
+
+| 组件 | 职责 |
+|---|---|
+| `程序端/web_server.py` | Flask 入口，host=0.0.0.0，PORT 从环境变量读取 |
+| `程序端/汇总脚本.py` | 适配层：mock tkinter、覆盖 OUTPUT_DIR/FONT_PATH、提供 `process_xls()` 封装 |
+| `程序端/msyh.ttc` | 微软雅黑字体(19MB)，嵌入仓库（Render 无 sudo 无法 apt-get） |
+| `@app.route('/')` | 返回移动端前端（响应式，内嵌 HTML/JS/CSS） |
+| `@app.route('/upload', POST)` | 接收 xls/xlsx → 调用 `process_xls()` → 返回 JSON(含下载链接) |
+| `@app.route('/download/<path>')` | PNG 下载路由：`?dl=1` 触发下载，否则内联显示(给 `<img>` 用) |
+| `@app.route('/health')` | 健康检查(Render 用) |
+| `requirements.txt` | flask、xlrd、openpyxl、Pillow |
+| `Procfile` | `web: python 程序端/web_server.py` |
+
 ## 数据流
 
 **exe 方案**:xls/xlsx → xlrd/openpyxl 读取 → 从 Row 2 提取内部日期(结束日期 -1 天为最后完整统计日,文件名仅 fallback)→ 按品牌 sum → 降序排序 → Pillow 画品牌汇总表(宽度自适应)→ 同时按品名列明细 → 2 个 PNG 输出到 `OUTPUT_DIR/<日期>/` 子文件夹 → `os.startfile()` 打开品牌汇总
 
 **网页端方案**:Edge 浏览器拖入 xls/xlsx → POST /upload → Flask 保存临时文件(唯一名)→ 复用 `read_xls`/`read_xlsx` + `draw_table` + `read_xls_items`/`read_xlsx_items` + `draw_table_detail` → 2 个 PNG 输出到 `OUTPUT_DIR/<日期>/` 子文件夹 → `os.startfile()` 打开品牌汇总 → 返回 JSON 状态给前端
 
-## 五种使用方式
+## 六种使用方式
 
 1. 拖 xls/xlsx 到 `dist\销售汇总.exe` 图标
 2. 双击 `销售汇总.exe` 打开拖拽窗口
 3. 命令行 `python 汇总脚本.py <xls/xlsx 路径>`
 4. 双击 `网页端\启动网页端.vbs`(v1.1 静默日常用,推荐)
 5. 双击 `网页端\启动网页端.bat` 或 `python 网页端\web_server.py`(开发/调试,看 Flask 日志)
+6. **手机端**：夸克打开 `https://sales-statistics-rdle.onrender.com`，选文件上传 → 预览 → 下载到手机(无需电脑)
 
 ## 关键约束
 
@@ -113,6 +131,14 @@ python 网页端\web_server.py
 - **改 `汇总脚本.py` 后网页端必须重启服务**(`app.run` 非热加载,需 Ctrl+C 重启)
 - **完全离线可用**:前端内嵌,无外部 CDN,所有 HTTP 引用均 `127.0.0.1`
 
+### 程序端(Render 云部署)特有
+- **公网地址**: `https://sales-statistics-rdle.onrender.com`
+- **GitHub 仓库**: `git@github.com:yorushika-Justin/sales-statistics.git`
+- **Render 免费层**: 750 小时/月,15 分钟不活跃休眠(冷启动约 30 秒),无硬性到期日
+- **改代码后需推送 GitHub**，Render 自动重新部署(约 2-3 分钟)
+- **不修改原版**:所有改动在 `程序端/` 目录，通过适配层复用原版逻辑
+- **字体嵌入**: `程序端/msyh.ttc`(19MB)直接放入仓库,Render 无 sudo 无法 apt-get
+
 ## 依赖
 
 ### exe 方案
@@ -134,6 +160,7 @@ python 网页端\web_server.py
 
 - `技术文档.md` — 完整技术文档(exe 方案:架构/打包/维护/限制/优化方向)
 - `网页端/技术文档.md` — 网页端方案技术文档
+- `程序端/技术文档.md` — 程序端方案技术文档(Render 云部署:架构/适配层/字体/下载/限制)
 - `工作记录/2026-06-05_销售汇总工具开发记录.md` — 开发时间线与经验沉淀(v1.0 → v1.5)
 - `对话.txt` — 完整对话流水(给其他 AI 验证用)
 - `提示文档.txt` — 原始需求
@@ -141,7 +168,9 @@ python 网页端\web_server.py
 
 ---
 
-**最新版本**:exe v1.7 / 网页端 v1.5 / 网页端-2 v2.0 / exe端-2 v2.0(2026-07-01)。变更细节见 `技术文档.md` 11 节 + `网页端/技术文档.md` 11 节 + `网页端-2/技术文档.md` 12 节 + `exe端-2/技术文档.md` 10 节。
+**最新版本**:exe v1.7 / 网页端 v1.5 / 网页端-2 v2.0 / exe端-2 v2.0 / 程序端 v1.0(2026-07-04)。变更细节见 `技术文档.md` 11 节 + `网页端/技术文档.md` 11 节 + `网页端-2/技术文档.md` 12 节 + `exe端-2/技术文档.md` 10 节 + `程序端/技术文档.md`。
+
+**程序端 v1.0 新增**(2026-07-04):Render.com 云部署，手机端可用。适配层模式（不修改原版）；tkinter mock；字体嵌入仓库(19MB)；/download 路由支持图片预览+下载到手机。公网地址 `https://sales-statistics-rdle.onrender.com`。详见 `程序端/技术文档.md`。
 
 **exe端-2 v2.0 新增**(2026-07-01):独立版本，输出路径改为 `D:\销售汇总\`（不依赖特定用户名路径）。新增 `系统信息检测.py`（环境检测脚本）；改进品名明细失败时的错误提示。详见 `exe端-2/技术文档.md`。
 

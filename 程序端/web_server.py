@@ -15,7 +15,7 @@ import tempfile
 import traceback
 from datetime import datetime
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 
 # 将项目根目录加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -272,14 +272,17 @@ def upload():
         else:
             msg += f'（品名明细生成失败）'
 
-        # 返回图片路径（服务器上无法用 os.startfile 打开，改为返回路径供前端展示）
+        # 返回下载链接
+        brand_url = f'/download/{date_str}/{date_str}.png'
+        item_url = f'/download/{date_str}/{date_str}_品名.png' if item_png else None
+
         return jsonify(
             success=True,
             message=msg,
             brand_png=f'{date_str}/{date_str}.png',
             item_png=f'{date_str}/{date_str}_品名.png' if item_png else None,
-            brand_png_url=None,  # 服务器上图片不对外暴露URL
-            item_png_url=None,
+            brand_png_url=brand_url,
+            item_png_url=item_url,
             total=total
         )
     except Exception as e:
@@ -295,6 +298,24 @@ def upload():
             os.remove(temp_path)
         except Exception:
             pass
+
+
+@app.route('/download/<path:filename>')
+def download(filename):
+    """下载生成的 PNG 文件"""
+    # 安全检查：只允许从 OUTPUT_DIR 下载 PNG
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath = os.path.normpath(filepath)
+
+    # 防止路径穿越攻击
+    if not filepath.startswith(os.path.normpath(OUTPUT_DIR)):
+        return jsonify(success=False, message='非法路径'), 403
+
+    if not os.path.exists(filepath):
+        return jsonify(success=False, message='文件不存在'), 404
+
+    # 返回图片，浏览器直接显示
+    return send_file(filepath, mimetype='image/png', as_attachment=False)
 
 
 @app.route('/health')

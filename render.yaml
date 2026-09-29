@@ -12,3 +12,7 @@ services:
         value: "3.11"
       - key: OUTPUT_DIR
         value: /opt/render/project/output
+      # 访问口令：留空即不启用（服务行为与旧版一致，不会有副作用）。
+      # sync: false 表示该值由面板手动填写，Blueprint 同步不会覆盖或清空它。
+      - key: ACCESS_TOKEN
+        sync: false

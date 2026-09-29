@@ -90,9 +90,11 @@ python 网页端\web_server.py
 | `程序端/msyh.ttc` | 微软雅黑字体(19MB)，嵌入仓库（Render 无 sudo 无法 apt-get） |
 | `@app.route('/')` | 返回移动端前端（响应式，内嵌 HTML/JS/CSS） |
 | `@app.route('/upload', POST)` | 接收 xls/xlsx → 调用 `process_xls()` → 返回 JSON(含下载链接) |
-| `@app.route('/download/<path>')` | PNG 下载路由：`?dl=1` 触发下载，否则内联显示(给 `<img>` 用) |
-| `@app.route('/health')` | 健康检查(Render 用) |
-| `requirements.txt` | flask、xlrd、openpyxl、Pillow |
+| `@app.route('/download/<path>')` | PNG 下载路由：`?dl=1` 触发下载，否则内联显示(给 `<img>` 用)。v1.1 起仅允许 `.png` + realpath 边界校验，并用**协商缓存**（`no-cache` + ETag） |
+| `@app.route('/history')` | **v1.1 新增** 最近生成的 PNG 列表(按北京时间倒序) |
+| `@app.route('/auth')` | **v1.1 新增** 访问口令校验(环境变量 `ACCESS_TOKEN`，未设置则不启用) |
+| `@app.route('/health')` | 健康检查(Render 用)。v1.1 起只返回 `{"status":"ok"}`，不再暴露服务器路径 |
+| `requirements.txt` | flask==3.1.3、xlrd==1.2.0、openpyxl==3.1.5、Pillow==12.1.1（v1.1 起锁版本） |
 | `Procfile` | `web: python 程序端/web_server.py` |
 
 ## 数据流
@@ -108,7 +110,7 @@ python 网页端\web_server.py
 3. 命令行 `python 汇总脚本.py <xls/xlsx 路径>`
 4. 双击 `网页端\启动网页端.vbs`(v1.1 静默日常用,推荐)
 5. 双击 `网页端\启动网页端.bat` 或 `python 网页端\web_server.py`(开发/调试,看 Flask 日志)
-6. **手机端**：夸克打开 `https://sales-statistics-rdle.onrender.com`，选文件上传 → 预览 → 下载到手机(无需电脑)
+6. **手机端**：手机浏览器打开 `https://sales-statistics-rdle.onrender.com`，选文件上传 → 预览 → 保存到手机(无需电脑)。v1.1 起支持访问口令(首次 `?k=<口令>` 或口令页输入，30 天免输)
 
 ## 关键约束
 
@@ -138,6 +140,14 @@ python 网页端\web_server.py
 - **改代码后需推送 GitHub**，Render 自动重新部署(约 2-3 分钟)
 - **不修改原版**:所有改动在 `程序端/` 目录，通过适配层复用原版逻辑
 - **字体嵌入**: `程序端/msyh.ttc`(19MB)直接放入仓库,Render 无 sudo 无法 apt-get
+- **访问口令(v1.1)**: 环境变量 `ACCESS_TOKEN`，**不设置则功能关闭**(行为与 v1.0 一致)；设置后 `/`、`/upload`、`/download`、`/history` 需口令，`/health` 放行（Render 健康检查）
+- **磁盘是临时的(v1.1)**: 容器重启或重新部署后 `/history` 清空，生成的 PNG 不留存
+- **依赖锁版本(v1.1)**: `requirements.txt` 已锁死 **10 个包**（含 Werkzeug/Jinja2 等传递依赖），升级依赖必须同步改这里
+- **处理串行化(v1.1)**: 适配层用全局锁串行处理，防止并发写坏同名 PNG
+- **错误定位(v1.1)**: 上传失败响应带 `detail`(文件:行号(函数)) + `error_id`，后者可在容器 `/tmp/sales_web_error.log` 检索完整堆栈
+- **图片协商缓存(v1.1)**: `/download` 用 `no-cache` + ETag（**不是** `max-age`）。图片 URL 按日期固定命名，用强缓存会导致同一天重传后手机仍显示/保存**旧图**（实际踩过的回归）
+- **口令支持中文(v1.1)**: 比较前统一编码为 bytes；直接 `compare_digest(str, str)` 遇非 ASCII 字符会抛 TypeError 变成 500
+- **错误定位指向项目代码(v1.1)**: 错误详情优先取**本项目**的最内层栈帧，而非 xlrd 等第三方库内部帧
 
 ## 依赖
 
@@ -168,7 +178,9 @@ python 网页端\web_server.py
 
 ---
 
-**最新版本**:exe v1.7 / 网页端 v1.5 / 网页端-2 v2.0 / exe端-2 v2.0 / 程序端 v1.0(2026-07-04)。变更细节见 `技术文档.md` 11 节 + `网页端/技术文档.md` 11 节 + `网页端-2/技术文档.md` 12 节 + `exe端-2/技术文档.md` 10 节 + `程序端/技术文档.md`。
+**最新版本**:exe v1.7 / 网页端 v1.5 / 网页端-2 v2.0 / exe端-2 v2.0 / 程序端 v1.1(2026-09-29)。变更细节见 `技术文档.md` 11 节 + `网页端/技术文档.md` 11 节 + `网页端-2/技术文档.md` 12 节 + `exe端-2/技术文档.md` 10 节 + `程序端/技术文档.md`。
+
+**程序端 v1.1 完善**(2026-09-29):18 项。**修**：文件选择框选完重置(手机上同一文件可重复选)、结果区替换而非累积、超限/异常统一返回 JSON(不再出现 `Unexpected token`)、错误响应带 `文件:行号(函数)` + `error_id`、触屏文案与响应式、冷启动唤醒提示、`/download` 路径校验收紧(旧逻辑同前缀兄弟目录可绕过，已实测坐实)、消除运行中改写全局 `FONT_PATH` 的线程竞态、依赖锁版本、`/health` 不再泄露服务器路径、品名明细失败不再返回不存在的图片地址、日志时间按北京时间、处理过程串行化。**增**：访问口令(`ACCESS_TOKEN`，默认关闭)、最近生成 `/history` + 图片协商缓存、界面美化 + 内联 favicon + PWA meta。**独立复核后追加修复 11 项（R 组）**：最要紧的是修掉了初版自己引入的"图片强缓存 → 同一天重传仍是旧图"回归，另有中文口令 500、错误定位指向第三方库内部帧、失败残留残缺 PNG 等。详见 `工作记录/2026-09-29_手机端程序完善记录.md`。
 
 **程序端 v1.0 新增**(2026-07-04):Render.com 云部署，手机端可用。适配层模式（不修改原版）；tkinter mock；字体嵌入仓库(19MB)；/download 路由支持图片预览+下载到手机。公网地址 `https://sales-statistics-rdle.onrender.com`。详见 `程序端/技术文档.md`。
 

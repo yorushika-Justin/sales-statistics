@@ -85,8 +85,42 @@ DETAIL_COL_AMOUNT_W = 200
 DETAIL_COL_STOCK_W = 120
 DETAIL_ROW_H = 52
 
+# 月度明细表格尺寸 (像素) —— v2.0 新增（月度采集专用，8 列）
+MONTH_COL_NUM_W = 70
+MONTH_COL_STORE_W = 190
+MONTH_COL_BARCODE_W = 200
+MONTH_COL_ITEM_W = 400
+MONTH_COL_BRAND_W = 180
+MONTH_COL_QTY_W = 110
+MONTH_COL_SPEC_W = 170
+MONTH_COL_AMOUNT_W = 160
+
 
 # ==================== 工具函数 ====================
+# v1.7.1: 无人值守（管道调用）时 show_error 只写日志+stderr, 不弹模态框; 失败由退出码 2 表达
+_HAD_ERROR = False
+
+
+def _has_ui(msg: str) -> bool:
+    """是否应该弹 tkinter 模态框
+
+    v1.7.1：只认显式信号——环境变量 `SUMMARY_NO_UI=1` 表示"静默模式"，
+    由 `Excel自动采集\\collect.js` 传入。其余任何情况（双击 exe / 拖拽窗口 /
+    终端手敲 / 其它调用方）都保持 v1.7 的弹框行为，不做环境猜测。
+
+    为什么不猜 isatty()：实测在 PowerShell / 终端包装器里运行时它也可能是 False，
+    靠它判断会误伤"用户手敲 python 汇总脚本.py 想看到错误框"的正常行为；
+    又要兼顾 `--noconsole` 打包的 exe（那种情况 sys.stdout/stderr 是空流或 None），
+    猜错任何一边的代价都比"多传一个环境变量"大得多。
+    """
+    return os.environ.get('SUMMARY_NO_UI') != '1'
+
+
+def _interactive() -> bool:
+    """当前是否处于交互提示模式（供排查用）"""
+    return _has_ui('')
+
+
 def extract_date_from_filename(filename: str) -> str:
     """从文件名提取 YYYY-MM-DD 格式日期, 失败则用今天"""
     m = re.search(r'(\d{4}-\d{2}-\d{2})', filename)
@@ -96,18 +130,29 @@ def extract_date_from_filename(filename: str) -> str:
 
 
 def show_error(msg: str, log_path: str = None, parent=None):
-    """用 tkinter 弹窗显示错误, 必要时写日志"""
-    try:
-        from tkinter import messagebox
-        if parent is not None:
-            messagebox.showerror("销售汇总 - 错误", msg, parent=parent)
-        else:
-            temp_root = tk.Tk()
-            temp_root.withdraw()
-            messagebox.showerror("销售汇总 - 错误", msg)
-            temp_root.destroy()
-    except Exception:
-        print(f"[错误] {msg}", file=sys.stderr)
+    """用 tkinter 弹窗显示错误, 必要时写日志
+
+    v1.7.1: 非交互场景（被采集脚本等以管道方式调用, stdin 不是终端）不再弹模态框,
+            改为写 stderr 并置位失败标记, 由 __main__ 以退出码 2 结束——
+            否则无人值守时会一直等人点"确定", 上游只能干等到超时。
+    """
+    if parent is None and not _has_ui(msg):
+        global _HAD_ERROR
+        _HAD_ERROR = True
+        print(f'[错误] {msg}', file=sys.stderr)
+    else:
+        try:
+            from tkinter import messagebox
+            if parent is not None:
+                messagebox.showerror("销售汇总 - 错误", msg, parent=parent)
+            else:
+                temp_root = tk.Tk()
+                temp_root.withdraw()
+                messagebox.showerror("销售汇总 - 错误", msg)
+                temp_root.destroy()
+        except Exception:
+            _HAD_ERROR = True
+            print(f"[错误] {msg}", file=sys.stderr)
     if log_path:
         try:
             with open(log_path, 'a', encoding='utf-8') as f:
@@ -566,8 +611,12 @@ def read_xlsx_items(path: str, log_path: str = None) -> tuple[list, str]:
     return items, date_str
 
 
-def draw_table(data: dict, date_str: str, output_path: str):
-    """Pillow 画表格, 保存为 PNG"""
+def _draw_table_with_title(data: dict, title: str, output_path: str):
+    """Pillow 画品牌汇总表格（标题由调用方给定），保存为 PNG
+
+    v2.0 新增：从 draw_table 原样抽出，供月度采集 draw_table_month 复用。
+    绘制逻辑与原 draw_table 逐行一致，旧调用方行为不变。
+    """
     if not os.path.exists(FONT_PATH):
         raise FileNotFoundError(f"找不到中文字体: {FONT_PATH}")
 
@@ -581,7 +630,6 @@ def draw_table(data: dict, date_str: str, output_path: str):
 
     # ---- 自适应宽度 ----
     # 计算标题宽度
-    title = f"销售汇总  {date_str}"
     title_w = font_title.getbbox(title)[2] - font_title.getbbox(title)[0]
 
     # 计算最宽品牌名宽度
@@ -640,6 +688,16 @@ def draw_table(data: dict, date_str: str, output_path: str):
     draw.text((x_mid + 20, y + 12), f"{total_amount:.2f}", font=font_total, fill=COLOR_TEXT)
 
     img.save(output_path, 'PNG')
+
+
+def draw_table(data: dict, date_str: str, output_path: str):
+    """Pillow 画表格, 保存为 PNG（品牌汇总，标题 = "销售汇总  <日期>"）"""
+    return _draw_table_with_title(data, f"销售汇总  {date_str}", output_path)
+
+
+def draw_table_month(data: dict, title: str, output_path: str):
+    """月度采集：画品牌汇总表格，标题直接用给定文案（如 "2026年9月总销量"）"""
+    return _draw_table_with_title(data, title, output_path)
 
 
 def draw_table_detail(items: list, date_str: str, output_path: str):
@@ -767,6 +825,259 @@ def draw_table_detail(items: list, date_str: str, output_path: str):
     img.save(output_path, 'PNG')
 
 
+# ==================== 月度采集专用（v2.0 新增，图形界面版调用） ====================
+# 说明：下面这些函数只服务"月度总销量 / 自由点总销量"两种模式，原有函数一行未改。
+# 数据源 = 供应商平台的"供应商日销售汇总"导出文件，但日期区间可跨整月。
+
+def _to_float(text):
+    """把单元格文本转 float（兼容千分位逗号），失败返回 None"""
+    if isinstance(text, (int, float)):
+        return float(text)
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        try:
+            return float(str(text).replace(',', '').strip())
+        except (TypeError, ValueError):
+            return None
+
+
+def _month_cols(header_values):
+    """在表头行里定位月度采集需要的列索引（定位不到返回 None）"""
+    def find(*keys, exclude=()):
+        for c, v in enumerate(header_values):
+            if all(k in v for k in keys) and not any(x in v for x in exclude):
+                return c
+        return None
+    return {
+        'date': find('日期'),
+        'store': find('门店名称'),
+        'barcode': find('条码'),
+        'item': find('品名', exclude=('品牌',)),
+        'spec': find('规格'),
+        'brand': find('品牌名称') if find('品牌名称') is not None else find('品牌', exclude=('名称',)),
+        'qty': find('销售数量') if find('销售数量') is not None else find('数量'),
+        'amount': find('销售金额'),
+    }
+
+
+def read_month_rows(path: str, log_path: str = None) -> tuple[list, dict]:
+    """读取销售明细导出文件（支持整月日期区间），返回逐行记录。
+
+    返回: ([(日期, 门店名称, 条码, 品名, 规格, 品牌名称, 数量, 金额), ...], meta)
+          meta = {'date_line', 'store_line', 'brand_line', 'header_row', 'rows'}
+    说明: 金额为 0 的行在这里**不过滤**（明细要与平台一致），过滤留给汇总函数。
+    """
+    is_xlsx = path.lower().endswith('.xlsx')
+    if is_xlsx:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            sh = wb.active
+            grid = [['' if c is None else str(c).strip() for c in row] for row in sh.iter_rows(values_only=True)]
+        finally:
+            wb.close()
+    else:
+        wb = xlrd.open_workbook(path)
+        sh = wb.sheet_by_index(0)
+        grid = [[str(sh.cell_value(i, c)).strip() for c in range(sh.ncols)] for i in range(sh.nrows)]
+
+    meta = {'date_line': '', 'store_line': '', 'brand_line': '', 'header_row': -1, 'rows': 0}
+    for i in range(min(9, len(grid))):
+        line = ' '.join(v for v in grid[i] if v)
+        if not meta['date_line'] and '日期' in line and '至' in line:
+            meta['date_line'] = line
+        if not meta['store_line'] and '门店机构' in line:
+            meta['store_line'] = line
+        if not meta['brand_line'] and line.startswith('品牌'):
+            meta['brand_line'] = line
+        if meta['header_row'] < 0 and any('品牌名称' in v for v in grid[i]) and any('销售金额' in v for v in grid[i]):
+            meta['header_row'] = i
+
+    h = meta['header_row']
+    if h < 0:
+        raise ValueError("找不到 '品牌名称' 与 '销售金额' 表头行")
+    cols = _month_cols(grid[h])
+    if cols['item'] is None:
+        raise ValueError("找不到 '品名' 列")
+    if cols['amount'] is None:
+        raise ValueError("找不到 '销售金额' 列")
+
+    def cell(row, key):
+        c = cols[key]
+        return row[c] if (c is not None and c < len(row)) else ''
+
+    rows = []
+    for i in range(h + 1, len(grid)):
+        r = grid[i]
+        brand = cell(r, 'brand')
+        if not brand or brand.startswith('合计') or brand in ('总', '总计'):
+            continue
+        item = cell(r, 'item')
+        if not item:
+            continue
+        amount = _to_float(cell(r, 'amount'))
+        if amount is None:
+            continue
+        qty = _to_float(cell(r, 'qty'))
+        rows.append((cell(r, 'date'), cell(r, 'store'), cell(r, 'barcode'), item,
+                     cell(r, 'spec'), brand, 0.0 if qty is None else qty, amount))
+    meta['rows'] = len(rows)
+    if log_path:
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f'[{datetime.now()}] 月度读取: {len(rows)} 行, 日期行="{meta["date_line"]}"\n')
+        except Exception:
+            pass
+    return rows, meta
+
+
+def sum_brand_from_rows(rows: list) -> dict:
+    """按"品牌名称"汇总销售金额，降序返回 {品牌: 金额}（金额为 0 的品牌剔除）"""
+    total = defaultdict(float)
+    for r in rows:
+        brand = r[5]
+        if not brand or brand.startswith('合计') or brand in ('总', '总计'):
+            continue
+        total[brand] += r[7]
+    data = {b: round(v, 2) for b, v in total.items() if round(v, 2) != 0}
+    return dict(sorted(data.items(), key=lambda kv: -kv[1]))
+
+
+def sum_items_from_rows(rows: list, brand: str = None) -> list:
+    """按 (条码, 品名, 规格) 聚合明细，保持首次出现顺序。
+
+    返回: [(门店名称, 条码, 品名, 品牌名称, 数量, 规格, 金额), ...]
+    brand 非空时只保留该品牌的记录。
+    """
+    agg = {}
+    for r in rows:
+        store, barcode, item, spec, bname, qty, amount = r[1], r[2], r[3], r[4], r[5], r[6], r[7]
+        if not bname or bname.startswith('合计') or bname in ('总', '总计'):
+            continue
+        if brand and bname != brand:
+            continue
+        if not item:
+            continue
+        key = (barcode, item, spec)
+        if key not in agg:
+            agg[key] = [store, barcode, item, bname, 0.0, spec, 0.0]
+        agg[key][4] += qty
+        agg[key][6] += amount
+    out = []
+    for v in agg.values():
+        q = round(v[4], 4)
+        v[4] = int(q) if float(q).is_integer() else q
+        v[6] = round(v[6], 2)
+        out.append(tuple(v))
+    return out
+
+
+def draw_table_detail_month(items: list, title: str, output_path: str):
+    """月度采集：画品名明细表格（8 列：行号/门店名称/国际条码/品名/品牌名称/销售数量/规格/销售金额）
+
+    v2.0 新增，与 draw_table_detail 平行维护（列结构不同，故不共用）。
+    items: [(门店名称, 条码, 品名, 品牌名称, 数量, 规格, 金额), ...]
+    """
+    if not os.path.exists(FONT_PATH):
+        raise FileNotFoundError(f"找不到中文字体: {FONT_PATH}")
+
+    font_title = ImageFont.truetype(FONT_PATH, SIZE_TITLE)
+    font_header = ImageFont.truetype(FONT_PATH, SIZE_HEADER)
+    font_body = ImageFont.truetype(FONT_PATH, SIZE_BODY)
+    font_total = ImageFont.truetype(FONT_PATH, SIZE_TOTAL)
+
+    n = len(items)
+    total_qty = round(sum(q for _, _, _, _, q, _, _ in items), 4)
+    total_amount = round(sum(a for _, _, _, _, _, _, a in items), 2)
+
+    # ---- 自适应宽度 ----
+    title_w = font_title.getbbox(title)[2] - font_title.getbbox(title)[0]
+    max_item_w = max_store_w = max_brand_w = 0
+    for store, _, item_name, brand, _, _, _ in items:
+        max_item_w = max(max_item_w, font_body.getbbox(item_name)[2] - font_body.getbbox(item_name)[0])
+        max_store_w = max(max_store_w, font_body.getbbox(store)[2] - font_body.getbbox(store)[0])
+        max_brand_w = max(max_brand_w, font_body.getbbox(brand)[2] - font_body.getbbox(brand)[0])
+
+    num_col_w = MONTH_COL_NUM_W
+    store_col_w = max(MONTH_COL_STORE_W, max_store_w + 40)
+    barcode_col_w = MONTH_COL_BARCODE_W
+    item_col_w = max(MONTH_COL_ITEM_W, max_item_w + 40)
+    brand_col_w = max(MONTH_COL_BRAND_W, max_brand_w + 40)
+    qty_col_w = MONTH_COL_QTY_W
+    spec_col_w = MONTH_COL_SPEC_W
+    amount_col_w = MONTH_COL_AMOUNT_W
+    total_col_w = (num_col_w + store_col_w + barcode_col_w + item_col_w
+                   + brand_col_w + qty_col_w + spec_col_w + amount_col_w)
+    width = max(total_col_w, title_w) + 2 * PADDING
+    height = (n + 2) * DETAIL_ROW_H + 2 * PADDING + 50
+
+    img = Image.new('RGB', (width, height), COLOR_BG)
+    draw = ImageDraw.Draw(img)
+
+    # ---- 标题（居中） ----
+    draw.text(((width - title_w) / 2, PADDING / 2), title, font=font_title, fill=COLOR_TEXT)
+
+    # ---- 表头 ----
+    x1 = PADDING
+    x2 = x1 + num_col_w
+    x3 = x2 + store_col_w
+    x4 = x3 + barcode_col_w
+    x5 = x4 + item_col_w
+    x6 = x5 + brand_col_w
+    x7 = x6 + qty_col_w
+    x8 = x7 + spec_col_w
+    x_right = x8 + amount_col_w
+    y = PADDING + 50
+
+    draw.rectangle([x1, y, x_right, y + DETAIL_ROW_H], outline=COLOR_BORDER, width=2)
+    for x in [x2, x3, x4, x5, x6, x7, x8]:
+        draw.line([(x, y), (x, y + DETAIL_ROW_H)], fill=COLOR_BORDER, width=2)
+    draw.text((x1 + 10, y + 12), "行号", font=font_header, fill=COLOR_TEXT)
+    draw.text((x2 + 10, y + 12), "门店名称", font=font_header, fill=COLOR_TEXT)
+    draw.text((x3 + 10, y + 12), "国际条码", font=font_header, fill=COLOR_TEXT)
+    draw.text((x4 + 20, y + 12), "品名", font=font_header, fill=COLOR_TEXT)
+    draw.text((x5 + 20, y + 12), "品牌名称", font=font_header, fill=COLOR_TEXT)
+    draw.text((x6 + 10, y + 12), "销售数量", font=font_header, fill=COLOR_TEXT)
+    draw.text((x7 + 10, y + 12), "规格", font=font_header, fill=COLOR_TEXT)
+    draw.text((x8 + 10, y + 12), "销售金额", font=font_header, fill=COLOR_TEXT)
+
+    # ---- 数据行 ----
+    y += DETAIL_ROW_H
+    for idx, (store, barcode, item_name, brand, qty, spec, amount) in enumerate(items, 1):
+        draw.rectangle([x1, y, x_right, y + DETAIL_ROW_H], outline=COLOR_BORDER, width=1)
+        for x in [x2, x3, x4, x5, x6, x7, x8]:
+            draw.line([(x, y), (x, y + DETAIL_ROW_H)], fill=COLOR_BORDER, width=1)
+
+        draw.text((x1 + 10, y + 14), str(idx), font=font_body, fill=COLOR_TEXT)
+
+        for xx, col_w, text, pad in ((x2, store_col_w, store, 10), (x3, barcode_col_w, barcode, 10),
+                                     (x4, item_col_w, item_name, 20), (x5, brand_col_w, brand, 20),
+                                     (x7, spec_col_w, spec, 10)):
+            shown = text
+            max_w = col_w - 20
+            if draw.textlength(text, font=font_body) > max_w:
+                while len(shown) > 0 and draw.textlength(shown + '…', font=font_body) > max_w:
+                    shown = shown[:-1]
+                shown += '…'
+            draw.text((xx + pad, y + 14), shown, font=font_body, fill=COLOR_TEXT)
+
+        qty_text = str(int(qty)) if float(qty).is_integer() else str(qty)
+        draw.text((x6 + 10, y + 14), qty_text, font=font_body, fill=COLOR_TEXT)
+        draw.text((x8 + 10, y + 14), f"{amount:.2f}", font=font_body, fill=COLOR_TEXT)
+        y += DETAIL_ROW_H
+
+    # ---- 合计行 ----
+    draw.rectangle([x1, y, x_right, y + DETAIL_ROW_H], outline=COLOR_BORDER, width=3)
+    for x in [x2, x3, x4, x5, x6, x7, x8]:
+        draw.line([(x, y), (x, y + DETAIL_ROW_H)], fill=COLOR_BORDER, width=3)
+    draw.text((x1 + 10, y + 12), "合计", font=font_total, fill=COLOR_TEXT)
+    total_qty_text = str(int(total_qty)) if float(total_qty).is_integer() else str(total_qty)
+    draw.text((x6 + 10, y + 12), total_qty_text, font=font_total, fill=COLOR_TEXT)
+    draw.text((x8 + 10, y + 12), f"{total_amount:.2f}", font=font_total, fill=COLOR_TEXT)
+
+    img.save(output_path, 'PNG')
+
+
 # ==================== 入口 ====================
 def main():
     if len(sys.argv) < 2:
@@ -813,3 +1124,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # v1.7.1: 无人值守场景把失败表达成退出码（2），供采集脚本 collect.js 判读
+    if _HAD_ERROR:
+        sys.exit(2)

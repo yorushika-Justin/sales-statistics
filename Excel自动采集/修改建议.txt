@@ -1,0 +1,136 @@
+思迅供应商平台「一键采集」全链路自动化系统代码与设计综合审查报告审查总览与系统架构基线本报告针对思迅商旗供应商平台销售数据「一键采集（A→C 全链路）」项目的全部交付成果进行系统级工程代码与技术架构审查。审查对象涵盖项目工作记录、设计规范文档、技术说明文档、主控脚本（collect.js）、启动批处理脚本（一键采集.bat）、运行配置文件（config.json）及图标辅助构建模块（make_icon.py）。该自动化系统的业务定位是通过无人工干预的方式，驱动宿主机 Edge 浏览器登录供应商系统，绕开纯 HTTP 登录时服务端固定返回 500 的接口黑盒缺陷，通过拦截底层原始图像字节流并结合本地 RapidOCR 识别验证码，完成指定门店前一日销售汇总报表的查询、导出，并驱动下游程序生成可视化图表进行核验。系统在架构选型上采用了 Playwright Core 搭配本机 Edge 运行时的轻量化方案，利用直接调用 EasyUI 内部 jQuery API 解决了动态日期选择组件设值的难题，并通过截获 VerifyCode.ashx 原始网络响应流规避了前端画布缩放带来的 OCR 识别噪点，整体设计展现了务实的逆向工程思路。然而，在代码具体实现与设计规范的对齐过程中，存在若干破坏业务连续性的高危逻辑缺陷，涉及状态判断死锁、核验假阳性、异常捕获静默化以及进程调度阻塞等问题。缺陷编号缺陷分类严重级别涉及模块与位置缺陷与风险摘要BUG-01业务逻辑 / 数据流高危 (Critical)collect.js / runQuery依赖合计行前后文本不相等作为数据刷新判据，在同条件二次运行或条件记忆自动加载时触发 30 秒超时并误报 0 行数据异常BUG-02校验机制 / 假阳性高危 (Critical)collect.js / verifyPngsPNG 生成核验仅依靠文件物理存在判定，未校对文件修改时间戳，历史残留同名文件将掩盖下游汇总脚本崩溃的真实故障BUG-03规范偏离 / 容错缺陷高危 (Critical)collect.js / readCaptcha未遵照设计文档严格限制 4 位验证码的规定，错误放宽为 4 至 8 位，导致噪点乱码被提交，过早消耗登录重试配额BUG-04异常抑制 / 级联崩溃高危 (Critical)collect.js / runExportExcel 格式及内容抽样校验异常被捕获后静默吞没，未能拦截 0 字节损坏文件，导致下游处理模块发生级联崩溃BUG-05资源生命周期 / 孤儿进程中危 (Medium)collect.js / 全局进程管理缺乏操作系统级中断信号监听与退出清理机制，控制台手动终止任务时将导致宿主机后台残留僵死无头 Edge 浏览器进程BUG-06异步调度 / 事件循环挂起中危 (Medium)collect.js / readCaptcha, runSummary核心流程采用长时间同步阻塞调用执行外部进程，挂起 Node.js 事件循环并破坏底层 DevTools 协议通信链路BUG-07交互流控制 / 效率瓶颈中危 (Medium)collect.js / doLogin登录重试时硬性等待跳转超时 10 秒，在前端弹窗提示明确错误时无法快速失败，造成数十秒无谓耗时BUG-08运行环境兼容性中危 (Medium)collect.js / 常量配置区Edge 可执行文件路径硬编码于 64 位程序目录，在 32 位系统或新版路径变更环境下直接导致阶段 0 预检阻断BUG-09依赖检测盲区低危 (Low)collect.js / preflight阶段 0 预检仅核查 Python 解释器二进制文件存在，未校验核心依赖库完整性，导致运行时报出模糊错误BUG-10凭据管理安全安全 (Security)config.json供应商平台登录密码采用明文存储，缺乏宿主机级别凭据加密或环境变量隔离机制BUG-11目录权限与文件残留安全 (Security)config.json / excel_dir默认落盘目录位于系统受保护目录，探测文件生成与删除极易触发安全防护报警，临时验证码文件缺乏自清理机制BUG-12辅助构建健壮性低危 (Low)make_icon.py, 一键采集.bat字体路径硬编码导致跨系统乱码、批处理脚本缺少运行时环境前置校验致命逻辑缺陷与运行时断言失效分析查询结果更新判定死锁与虚假数据缺失异常主控脚本在阶段 2（runQuery）处理 EasyUI 报表查询结果加载时，引入了对比点击前后底部合计行文本的防护逻辑。代码在触发查询按钮点击前，首先提取当前页面底部的合计行文本存入局部变量 footerBefore，随后触发查询并进入最长 30 秒的轮询检测。在轮询循环内，脚本使用正则表达式匹配合计行中的条数信息，并设定只有当匹配到“N条”且当前合计行文本不等于 footerBefore 时，才认定数据加载完成并跳出循环；循环结束后，如果提取到的记录行数不大于零，系统将直接抛出 NO_DATA 错误，终止后续所有流程。这一判断机制存在严重的系统性设计漏洞。在真实业务环境中，思迅平台具备页面条件记忆机制，当操作人员在同一自然日内多次执行采集脚本，或者系统发生局部重试导致页面重新加载时，报表页面在初始化阶段就会自动拉取并呈现上一次查询出的销售数据。此时，点击查询前的 footerBefore 已经包含了完整的目标数据统计文本，例如包含具体条数与总金额的字符串。当点击 #btnQuery 后，服务端返回完全相同的当期数据，前端 EasyUI 渲染完成后的文本与 footerBefore 完全一致，导致 info.footer !== footerBefore 恒为假。由于该条件无法满足，轮询机制将被迫持续等待直至 30 秒硬超时，并在退出循环后将有效行数强制赋值为零，进而抛出 NO_DATA 异常。该故障直接导致系统错误地向使用者提示“昨天数据可能尚未同步，请稍后重跑”，彻底阻断了正常的数据导出与汇总流转。有效的状态监控应当基于 EasyUI DataGrid 的底层网络响应完成事件或检测前端加载遮罩层（.datagrid-mask）的挂载与卸载，而不应使用脆弱的字符串字面值不相等作为核心判定依据。产物核验机制假阳性穿透缺陷阶段 4 的产物核验逻辑（verifyPngs）旨在确保下游图表生成模块正确输出了可视化的品牌汇总与品名明细图表。当前代码实现中，核验逻辑仅仅调用了 Node.js 原生文件系统接口 fs.existsSync 对配置目录下的两张目标 PNG 文件进行存在性探查，一旦两个路径均返回真，即认定汇总环节成功，并在控制台输出成功日志后终止进程。这种仅校验文件物理存在的设计打破了数据处理流水线的因果一致性。在日常运营场景中，由于前一天的测试、人工手动执行 销售汇总.exe 或脚本历史运行，目标日期子目录下往往已经残留了同名的历史 PNG 文件。当本次任务执行阶段 4 调用 销售汇总.exe 遭遇内部异常（例如 Python 底层内存溢出、Pandas 依赖冲突或数据列格式缺失）导致执行失败时，只要历史文件存在，verifyPngs 便会毫无感知地放行。该漏洞会导致系统呈现极具欺骗性的假阳性结果：控制台与日志均打印全链路成功完成的信息，但实际产出目录中的图表仍然是历史陈旧数据，运维人员无法在第一时间感知汇总失败，直到业务端查看图表发现数据未更新时才会暴露问题。严密的工程实现必须获取文件的最后修改时间戳（mtimeMs），并严格断言该时间戳大于或等于本次采集主任务的启动时间戳，甚至应在调用汇总模块前对既有历史目标文件执行清理或归档备份。验证码识别长度校验偏离核心设计规范根据《设计文档》第 6 节明确定义的业务规则，阶段 1 登录过程中，验证码识别模块在获取识别结果后，必须严格执行“识别结果为空或长度不等于 4 则重刷验证码”的过滤策略。实测事实与系统特征也表明，该思迅供应商系统的图形验证码为固定 4 位字符。但在主程序 collect.js 的 readCaptcha 函数中，实际生效的有效性判断被非受控地放宽为字符串长度大于等于 4 且小于等于 8。当 RapidOCR 在解析低质量图像时因背景噪点、文字边缘粘连或二值化异常产生误判，输出包含干扰字符的 5 至 8 位虚假文本时，该函数会将其判定为有效验证码直接返回。后续登录逻辑将该错误验证码填入表单并提交，必然引发供应商服务端返回“A012 验证码错误”的业务告警，并消耗一次宝贵的登录尝试配额。鉴于配置文件中默认设定的 login_retry 仅为 5 次，此类完全可以在客户端本地闭环过滤并快速重新抓取识别的偶发噪点，将直接导致系统过早耗尽重试次数而彻底报错崩溃，显著削弱了系统的自主容错能力。导出文件格式校验异常静默吞没与下游级联崩溃在阶段 3 的 runExport 函数末端，主控脚本设计了通过 Python 调用 xlrd 引擎对下载落盘的 Excel 文件进行抽样核查的逻辑，旨在快速提取文件的数据总行数和表头字段。然而，该校验代码段被包裹在粗糙的 try ... catch 结构内，一旦发生任何解析异常，仅仅向日志追加一条跳过校验的信息，随后仍将该文件路径正常返回并送入阶段 4 的下游汇总引擎。在真实的 Web 自动化抓取环境中，供应商服务端的导出接口在面对并发排队、数据库锁表或网关超时时，极易返回 0 字节的空文件，或者返回 HTTP 状态码为 200 但实际内容为 ASP.NET 报错堆栈的 HTML 文本并赋予 .xls 后缀。在这些异常场景下，xlrd 必然会抛出文件格式无法识别或损坏的致命错误。脚本在捕获到此类格式解析异常后选择静默忽略，导致下游的 销售汇总.exe 在解析非法文件时崩溃并弹出未捕获的 GUI 错误对话框，破坏了自动化流程的防御性屏障。进程调度模型、健壮性与异步生命周期缺陷无头浏览器进程脱轨与宿主机资源泄漏当前主控脚本在 Playwright 浏览器的生命周期管控上，仅在流程正常执行完毕以及最外层的全局 try ... catch 错误捕获块中调用了 browser.close()。程序完全没有注册任何操作系统级别的进程中断与终止信号监听器，例如 POSIX 标准的 SIGINT、SIGTERM 以及 Windows 控制台环境下的退出信号。在日常运维或人工介入过程中，使用者通过快捷键 Ctrl + C 强制终止卡顿任务，或者直接点击 CMD 控制台窗口右上角的关闭按钮是极其普遍的操作行为。一旦发生此类外部硬中断，Node.js 运行时会被操作系统瞬时销毁，无法触发执行 catch 块内的清理逻辑。而通过 Playwright 启动的底层 msedge.exe 进程及其庞大的渲染子进程树将完全脱离父进程管控，沦为驻留系统后台的孤儿进程。随着定时任务或重复运行的累积，后台将逐渐堆积大量僵死浏览器实例，持续吞噬主机物理内存与句柄资源，甚至因占用用户数据缓存目录而引发后续自动化实例的启动崩溃。外部调用长时间同步阻塞对事件循环的破坏主控脚本在调用 Python OCR 脚本、Excel 数据校验脚本以及调用核心汇总程序 销售汇总.exe 时，全量使用了 Node.js 原生子进程模块中的同步方法 execFileSync。其中 OCR 单次调用的超时上限配置为 60 秒，阶段 4 汇总调用的超时上限更高达 120 秒。execFileSync 会导致 Node.js 运行时的主事件循环线程发生无条件挂起。在外部进程执行期间，Node.js 无法处理任何底层的异步网络 I/O、宏任务微任务队列以及维持 Playwright 运转所必需的 Chrome DevTools Protocol (CDP) WebSocket 心跳机制。若 销售汇总.exe 因发生数据处理异常而弹出了阻塞式的 GUI 对话框（如技术文档中确认的 Tkinter 报错弹窗），主进程将被迫处于完全冻结状态长达 120 秒，直至超时强制斩断，严重破坏了自动化任务的响应性与诊断透明度。主控流程应全面重构成基于 Promise 封装的异步进程调度，确保事件循环的持续运转与底层连接的健康维持。登录重试机制中的无效时延惩罚在阶段 1 的 doLogin 函数中，提交表单后的状态等待逻辑存在明显的执行效率缺陷。脚本在点击登录按钮 #btnLogin 后，直接调用了 page.waitForURL(/OnlineMain\.aspx/i, { timeout: 10000 })，并用空的 catch 块捕获超时异常。在实际业务场景中，当验证码识别失误或凭据不正确时，思迅平台的前端页面会立刻弹出 JavaScript 原生 alert 提示框（例如提示“A012 验证码错误”）。虽然页面监听器 page.on('dialog', ...) 能够迅速拦截并关闭该弹窗，但紧随其后的 page.waitForURL 仍会机械地等待 URL 发生跳转，直到整整 10 秒超时耗尽后才进入下一轮逻辑。这意味着每一次识别失误都会带来长达 10 秒的硬性时间惩罚，单次任务若重试 5 次，仅等待超时就会浪费近 1 分钟时间。系统应将 URL 变更等待与弹窗监听设计为并发竞争模型，一旦捕获到业务失败弹窗，立即主动中断等待并快速步入下一轮重试。宿主浏览器可执行文件路径的脆弱性主控脚本常量区将 Edge 浏览器的执行路径强行硬编码为 C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe。虽然该路径在常见的 64 位 Windows 系统中较为通用，但在特定的 32 位操作系统、定制精简版系统，或是微软新版更新调整了安装目录的环境下，该文件极有可能被重定向至 C:\Program Files\Microsoft\Edge\Application\msedge.exe 或本地用户的 AppData 目录。由于阶段 0 的预检逻辑直接使用 fs.existsSync(EDGE) 对该硬编码路径进行物理检查，一旦宿主系统环境存在微小差异，自动化流程将在预检阶段直接报错中断。事实上，Playwright 自身具备成熟的浏览器定位发现机制，在启动配置中直接声明 channel: 'msedge'，即可交由底层库自动检索系统注册表以获取精确路径，完全无需通过静态代码进行脆弱的绝对路径锁定。数据流安全、预检盲区与环境隔离审查阶段 0 预检机制的依赖深度盲区阶段 0 的预检函数（preflight）设计初衷是提前阻断因运行环境不满足要求而导致的流程崩溃。通过对实际检测项的拆解分析，该机制在依赖检测的深度上存在明显不足。检测对象代码内检测逻辑实际覆盖深度缺陷分析与故障表现playwright-core 依赖包检查 node_modules/playwright-core 物理目录良好能有效拦截 Node 端包缺失Edge 浏览器可执行文件检查硬编码的 EDGE 绝对路径存在性存在局限无法适配 32 位或自定义安装路径的宿主环境Python OCR 运行环境检查 cfg.python 二进制解释器文件存在性严重残缺仅验证解释器存在，未核验内部是否已安装 rapidocr_onnxruntime[cite: 2]销售汇总执行文件根据模式检测 .py 脚本或 .exe 文件存在性良好路径完整性校验符合设计预期输出与落盘目录尝试写入 ._wtest_<pid>.tmp 临时文件并删除基本有效权限验证有效，但探测文件命名与高频清理易触发安全防护报警从对比中可以看出，预检逻辑仅验证了 Python 解释器二进制文件是否存在，而未执行任何依赖包导入检测。若部署环境切换了 Python 虚拟环境，或初次安装时遗漏了核心第三方库，预检环节将轻易放行。当主流程步入阶段 1 尝试识别验证码时，Python 进程因无法导入 rapidocr_onnxruntime 模块而崩溃退出，抛出的异常又被子进程调用捕获，最终表现为具有迷惑性的“登录失败（已重试 5 次）”报错，极大地增加了现场排查与维护定位的认知负担。敏感凭据明文持久化与安全管理缺陷配置文件 config.json 将供应商平台的登录用户名与明文登录密码直接固化存储在本地文件系统中。虽然主流程代码与日志系统严格恪守了设计约定，在日志文件与控制台输出中均未打印密码明文，这体现了一定的安全防护意识，但明文存储本身仍带来了显著的安全外溢风险。由于项目涉及多人协作与交付归档（开发记录中已明确提到发代码前需要对密码执行手动打码操作），开发者极易因疏忽将包含真实业务系统账户凭据的配置文件提交至版本控制系统或共享给第三方人员。此外，缺乏操作系统保护的明文文件极易被宿主机上的其他低权限进程读取。系统应支持从宿主机环境变量动态读取凭据，或在 Windows 环境下使用 Data Protection API (DPAPI) 对存储的密码字段进行本地绑定加密。受保护目录落盘风险与临时文件残留在 config.json 的标准配置中，Excel 导出的默认落盘路径被指定为 D:\Program Files (x86)。将频繁生成的动态业务数据报表直接保存在带有系统保护属性的应用安装目录下，是不符合系统工程规范的。一方面，主流企业级端点防护软件（EDR）及 Windows Defender 对 Program Files 目录树下的文件写操作实施高频审计。脚本中的 canWriteDir 函数通过向该目录写入形如 ._wtest_<pid>.tmp 的临时文件进行写权限探测，并立即执行物理删除，此类瞬时生成并销毁隐藏临时文件的行为特征极易被杀毒软件判定为恶意探测而实施阻断或报警。另一方面，删除操作在遇到端点防护软件锁定时会抛出 EBUSY 异常，进而导致预检误报目录不可写。此外，主控程序在调用 OCR 识别前将网络流保存为 _pw_captcha_run.png，但在单次识别完成后从未执行主动删除，导致包含敏感业务特征的验证码图片长期滞留在项目工作区。辅助脚本的边界异常辅助构建工具 make_icon.py 中直接将微软雅黑字体路径硬编码为 C:\Windows\Fonts\msyh.ttc。在特定的精简版 Windows Server 环境、非中文语言包环境或缺少该特定字体的容器镜像中，代码捕获到字体加载异常后将静默回退至 ImageFont.load_default()。PIL 的默认字体无法正确计算中文字符“汇”的渲染边界，且不支持多字节中文字符渲染，最终生成的图标文件将出现严重的乱码与图形错位。同时，入口脚本 一键采集.bat 缺乏对系统 PATH 环境变量中 Node.js 的前置探测，若宿主机未配置 Node 环境，控制台将仅展示简短的原生批处理报错并迅速退出，缺乏友好度。设计规范与代码落地差异对照矩阵将《设计文档》及《技术文档》中界定的各阶段设计规范，与主控代码 collect.js 及关联配置文件的实际实现进行全维度对照，具体落地偏差与影响分析如下表所示。业务阶段与模块设计文档与技术文档规范要求实际代码落地实现规范符合度偏差分析与潜在风险阶段 0：环境预检严格验证 Node、Edge、Python、依赖包、目标目录及写入权限仅检测路径存在性，通过写探测验证目录写权限，遗漏 Python 内部库检测基本符合缺失 Python 库级检测，在依赖未完整安装时导致故障根因被掩盖阶段 1：会话试探优先通过 _pw_state.json 访问报表页，遇登录表单判定失效并重登读取会话文件后直访报表页，通过检测 #UserName 元素判定是否失效完全符合会话复用与降级路径设计平滑，符合技术文档设计预期阶段 1：验证码处理拦截服务端原图；识别结果为空或长度不等于 4 必须刷新重刷拦截原图并调用 Python；但代码放宽判定为 4 至 8 位字符存在偏差偏离设计规范，放行包含噪点的非法验证码，增加登录失败概率阶段 1：登录容错登录失败自动刷新重试，重试上限由 login_retry 严格控制循环捕获单次登录异常，保留现场截图并执行下一次重试完全符合遵循了 v1.1 代码审查要求，单次异常不中断重试循环阶段 2：报表查询设定起止日期为前一天；校验门店名；查询结果等于 0 必须阻断动态调用 EasyUI API 设值；通过文本判断门店；依赖前后合计文本不等判定加载完成存在缺陷合计行比对逻辑存在漏洞，在同条件二次运行或热加载下引发误报阻断阶段 3：数据导出捕获下载事件并保存至指定目录；通过 xlrd 抽样校验前三行数据监听 download 事件落盘；执行 Python 抽样校验，但异常被静默忽略存在缺陷校验异常未中断流程，损坏或空 Excel 文件仍被继续送往阶段 4 处理阶段 4：汇总驱动根据模式调用外部 exe 或 py；捕获失败时指向专属日志文件使用 execFileSync 同步调用外部程序，注入 120 秒超时与异常提示基本符合核心功能实现闭环，但长时间同步阻塞调用冻结了主事件循环阶段 4：产物核验严格断言输出目录下目标日期的两张 PNG 报表已生成并可读仅通过 fs.existsSync 检查目标文件路径是否存在，未校验生成时间戳存在缺陷历史旧文件残留导致汇总程序崩溃时仍判定成功的假阳性工程整改方案与重构指导为彻底消除上述严重缺陷并保障系统的生产级健壮性，本节提供结构化的工程重构建议与关键代码修复实现。查询完成状态判定重构针对 BUG-01，废弃基于合计行字面值比对的前后防陈旧机制，改用 EasyUI 标准的网络响应完成或 DOM 加载状态监测。若继续沿用 DOM 轮询，应通过监测表格内部动态加载遮罩层的消除，结合数据行数与合计行匹配状态进行综合裁决：JavaScript// 修复后建议实现：移除 footer !== footerBefore 依赖，引入合理的完成判定
+await page.click('#btnQuery');
+const deadline = Date.now() + 30000;
+let info = { count: 0, footer: '' };
+let stablePolls = 0;
+
+while (Date.now() < deadline) {
+  await page.waitForTimeout(800);
+  info = await page.evaluate(() => {
+    const rows = document.querySelectorAll('.datagrid-btable tr').length;
+    const footer = [...document.querySelectorAll('.datagrid-ftable')]
+      .map((t) => t.innerText.replace(/\s+/g, ' ').trim()).join(' | ');
+    const isLoading = !!document.querySelector('.datagrid-mask');
+    return { count: rows, footer, isLoading };
+  });
+
+  // 如果 EasyUI 加载遮罩层已消失，且合计行已呈现
+  if (!info.isLoading && info.footer.includes('合计')) {
+    const match = info.footer.match(/(\d+)\s*条/);
+    if (match) {
+      // 成功匹配到确切记录数
+      break;
+    }
+    // 空数据分支：呈现合计行但无条数统计，且连续稳定存在
+    if (info.count <= 1 && ++stablePolls >= 3) {
+      break;
+    }
+  }
+}
+
+const match = info.footer.match(/(\d+)\s*条/);
+const n = match ? parseInt(match[1], 10) : 0;
+log(`查询结果: ${n} 条 | ${info.footer.slice(0, 120)}`);
+if (!(n > 0)) throw new Error('NO_DATA');
+return n;
+产物核验与时间戳防御重构针对 BUG-02，在 verifyPngs 函数中引入任务启动时间戳校验机制，并在主流程启动阶段将时间戳传递至阶段 4，确保只有在本次任务生命周期内写入的文件才被认定为有效产物：JavaScriptfunction verifyPngs(dateStr, taskStartTime) {
+  const dir = path.join(cfg.png_dir, dateStr);
+  const a = path.join(dir, `${dateStr}.png`);
+  const b = path.join(dir, `${dateStr}_品名.png`);
+
+  const statA = fs.existsSync(a) ? fs.statSync(a) : null;
+  const statB = fs.existsSync(b) ? fs.statSync(b) : null;
+
+  const validA = statA && statA.mtimeMs >= taskStartTime;
+  const validB = statB && statB.mtimeMs >= taskStartTime;
+
+  if (!validA || !validB) {
+    const reasonA = !statA ? '文件不存在' : (statA.mtimeMs < taskStartTime ? '为历史陈旧文件' : '正常');
+    const reasonB = !statB ? '文件不存在' : (statB.mtimeMs < taskStartTime ? '为历史陈旧文件' : '正常');
+    throw new Error(`PNG 核验失败: 品牌汇总(${reasonA}), 品名明细(${reasonB})，目录: ${dir}`);
+  }
+
+  log(`PNG 品牌汇总核验成功: ${a} (${statA.size} 字节)`);
+  log(`PNG 品名明细核验成功: ${b} (${statB.size} 字节)`);
+}
+严格对齐验证码识别与环境清理针对 BUG-03 与 BUG-11，将验证码识别逻辑严格恢复至仅允许 4 位字符，并在完成调用后无论成败均执行临时图片清理，防止敏感数据滞留磁盘：JavaScript// 在 readCaptcha 中实施严格过滤与清理
+let code = '';
+try {
+  code = execFileSync(cfg.python, ['-c',
+    'import sys; from rapidocr_onnxruntime import RapidOCR; e=RapidOCR(); r,_=e(sys.argv[1]); print(r[0][1] if r else "")',
+    CAPTCHA_TMP], { timeout: 60000 }).toString().trim();
+} catch (e) {
+  log('OCR 异常: ' + e.message);
+} finally {
+  // 确保临时验证码图片在单次识别完成后立即清理
+  try { if (fs.existsSync(CAPTCHA_TMP)) fs.unlinkSync(CAPTCHA_TMP); } catch (_) {}
+}
+
+// 移除潜在的空白字符并严格核准 4 位长度
+const sanitizedCode = code.replace(/\s+/g, '');
+log(`验证码识别(${attempt}): ${sanitizedCode || '(空)'} [${buf.length}B]`);
+
+if (sanitizedCode && sanitizedCode.length === 4) {
+  return sanitizedCode;
+}
+阻断式 Excel 下载校验与容错增强针对 BUG-04，在 runExport 函数中，一旦格式解析失败或判定文件行数异常，必须主动抛出阻断异常，严禁放任损坏数据流入阶段 4：JavaScripttry {
+  const out = execFileSync(cfg.python, ['-c',
+    'import sys, xlrd; wb=xlrd.open_workbook(sys.argv[1]); sh=wb.sheet_by_index(0); print(sh.nrows); print(str(sh.cell_value(1,1))[:40] if sh.nrows>1 else "")',
+    dest], { timeout: 30000 }).toString().trim().split('\n');
+
+  const rows = parseInt(out[0], 10);
+  if (isNaN(rows) || rows <= 1) {
+    throw new Error(`导出的 Excel 内容行数异常（${rows} 行）`);
+  }
+  log(`Excel 校验成功: ${rows} 行, 标题 "${(out[1] || '').trim()}"`);
+} catch (e) {
+  throw new Error(`Excel 数据完整性校验失败，文件已损坏或非合法格式: ${e.message}`);
+}
+全局进程退出钩子与孤儿进程治理针对 BUG-05，在主流程初始化完成浏览器启动后，注册全局系统退出事件，确保外部强行终止时底层浏览器能够得到彻底清理：JavaScriptfunction registerProcessGuards(browser) {
+  const cleanUp = async () => {
+    try {
+      if (browser) {
+        await browser.close();
+        log('宿主机 Edge 浏览器进程已释放');
+      }
+    } catch (_) {}
+    process.exit(1);
+  };
+
+  process.once('SIGINT', cleanUp);
+  process.once('SIGTERM', cleanUp);
+  process.once('SIGHUP', cleanUp);
+}
+阶段 0 预检模块深化针对 BUG-08 与 BUG-09，将预检机制扩展至 Python 第三方依赖的动态探测，并移除对固定 Edge 绝对路径的单一依赖：JavaScriptfunction preflight() {
+  const need = [
+    ['playwright-core 依赖', path.join(DIR, 'node_modules', 'playwright-core')],
+    ['Python 解释器', cfg.python],
+    ['Excel 下载目录', cfg.excel_dir],
+    ['销售额输出目录', cfg.png_dir],
+  ];
+  if (cfg.summary_mode === 'py') need.push(['汇总脚本.py', SUMMARY_PY]);
+  else need.push(['销售汇总.exe', path.resolve(DIR, cfg.summary_exe)]);
+
+  const missing = need.filter(([, p]) => !fs.existsSync(p));
+  if (missing.length) {
+    for (const [n, p] of missing) console.error(`缺依赖: ${n} -> ${p}`);
+    process.exit(1);
+  }
+
+  // 深度探测 Python 模块完整性
+  try {
+    execFileSync(cfg.python, ['-c', 'import rapidocr_onnxruntime, xlrd'], { timeout: 10000 });
+  } catch (e) {
+    console.error(`Python 核心库缺失: 请确保已执行 pip install rapidocr_onnxruntime xlrd (环境: ${cfg.python})`);
+    process.exit(1);
+  }
+
+  for (const [n, d] of [['Excel 下载目录', cfg.excel_dir], ['销售额输出目录', cfg.png_dir]]) {
+    if (!canWriteDir(d)) {
+      console.error(`目录不可写: ${n} -> ${d}`);
+      process.exit(1);
+    }
+  }
+  log('预检通过（核心依赖与运行库完整）');
+}
+审查结论本次针对思迅商旗供应商平台「一键采集」全链路系统的审查表明，该系统在主干思路上成功攻克了纯 HTTP 模拟受阻的难题，构建了兼顾验证码原图 OCR、EasyUI API 交互及会话复用的实用型自动化流水线。然而，代码实现中存在的 4 项高危缺陷直接破坏了业务闭环的稳定性。特别是由于查询防陈旧机制导致的同条件重复运行死锁、产物核验时缺乏时间戳校验而导致的假阳性、以及对损坏 Excel 文件的静默放行，构成了严峻的业务隐患。伴随的宿主机无头浏览器进程残留与事件循环同步阻塞，亦会对无人值守环境的稳定性产生不良累积效应。维护团队应立即根据本报告提出的整改方案，优先针对查询完成判据与产物核验逻辑实施补丁修复，并在预检阶段补齐核心运行库深度检测，以确保整套自动化系统达到可靠稳定的生产交付标准。

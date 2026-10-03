@@ -1,0 +1,18 @@
+# —— 一键采集专用忽略规则（仅作用于本目录）——
+# 凭据与安全：绝不入库
+config.json
+_pw_state.json
+
+# 运行产物
+logs/
+_pw_captcha_run.png
+_icon_preview.png
+
+# 依赖（12.8MB，可用 npm i playwright-core 还原）
+node_modules/
+
+# 试跑脚本产生的散落文件
+导出_*.xls
+
+# 平台样例数据（含真实门店/品名/金额，不入库；回归测试用，本地保留）
+样例_*.xls
